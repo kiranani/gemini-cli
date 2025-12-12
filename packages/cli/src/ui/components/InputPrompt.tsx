@@ -83,7 +83,7 @@ export interface InputPromptProps {
   isEmbeddedShellFocused?: boolean;
   setQueueErrorMessage: (message: string | null) => void;
   streamingState: StreamingState;
-  popAllMessages?: (onPop: (messages: string | undefined) => void) => void;
+  popAllMessages?: () => string | undefined;
   suggestionsPosition?: 'above' | 'below';
   setBannerVisible: (visible: boolean) => void;
 }
@@ -143,15 +143,6 @@ export const InputPrompt: React.FC<InputPromptProps> = ({
   const pasteTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const innerBoxRef = useRef<DOMElement>(null);
 
-  const [dirs, setDirs] = useState<readonly string[]>(
-    config.getWorkspaceContext().getDirectories(),
-  );
-  const dirsChanged = config.getWorkspaceContext().getDirectories();
-  useEffect(() => {
-    if (dirs.length !== dirsChanged.length) {
-      setDirs(dirsChanged);
-    }
-  }, [dirs.length, dirsChanged]);
   const [reverseSearchActive, setReverseSearchActive] = useState(false);
   const [commandSearchActive, setCommandSearchActive] = useState(false);
   const [textBeforeReverseSearch, setTextBeforeReverseSearch] = useState('');
@@ -165,7 +156,6 @@ export const InputPrompt: React.FC<InputPromptProps> = ({
 
   const completion = useCommandCompletion(
     buffer,
-    dirs,
     config.getTargetDir(),
     slashCommands,
     commandContext,
@@ -310,14 +300,13 @@ export const InputPrompt: React.FC<InputPromptProps> = ({
   // Returns true if we should continue with input history navigation
   const tryLoadQueuedMessages = useCallback(() => {
     if (buffer.text.trim() === '' && popAllMessages) {
-      popAllMessages((allMessages) => {
-        if (allMessages) {
-          buffer.setText(allMessages);
-        } else {
-          // No queued messages, proceed with input history
-          inputHistory.navigateUp();
-        }
-      });
+      const allMessages = popAllMessages();
+      if (allMessages) {
+        buffer.setText(allMessages);
+      } else {
+        // No queued messages, proceed with input history
+        inputHistory.navigateUp();
+      }
       return true; // We handled the up arrow key
     }
     return false;
@@ -384,6 +373,7 @@ export const InputPrompt: React.FC<InputPromptProps> = ({
   useMouse(
     (event: MouseEvent) => {
       if (event.name === 'right-release') {
+        // eslint-disable-next-line @typescript-eslint/no-floating-promises
         handleClipboardPaste();
       }
     },
@@ -631,15 +621,40 @@ export const InputPrompt: React.FC<InputPromptProps> = ({
               const isEnterKey = key.name === 'return' && !key.ctrl;
 
               if (isEnterKey && buffer.text.startsWith('/')) {
-                const command = completion.getCommandFromSuggestion(suggestion);
+                const { isArgumentCompletion, leafCommand } =
+                  completion.slashCompletionRange;
 
-                if (command && isAutoExecutableCommand(command)) {
+                if (
+                  isArgumentCompletion &&
+                  isAutoExecutableCommand(leafCommand)
+                ) {
+                  // isArgumentCompletion guarantees leafCommand exists
                   const completedText = completion.getCompletedText(suggestion);
-
                   if (completedText) {
                     setExpandedSuggestionIndex(-1);
                     handleSubmit(completedText.trim());
                     return;
+                  }
+                } else if (!isArgumentCompletion) {
+                  // Existing logic for command name completion
+                  const command =
+                    completion.getCommandFromSuggestion(suggestion);
+
+                  // Only auto-execute if the command has no completion function
+                  // (i.e., it doesn't require an argument to be selected)
+                  if (
+                    command &&
+                    isAutoExecutableCommand(command) &&
+                    !command.completion
+                  ) {
+                    const completedText =
+                      completion.getCompletedText(suggestion);
+
+                    if (completedText) {
+                      setExpandedSuggestionIndex(-1);
+                      handleSubmit(completedText.trim());
+                      return;
+                    }
                   }
                 }
               }
@@ -790,12 +805,14 @@ export const InputPrompt: React.FC<InputPromptProps> = ({
 
       // External editor
       if (keyMatchers[Command.OPEN_EXTERNAL_EDITOR](key)) {
+        // eslint-disable-next-line @typescript-eslint/no-floating-promises
         buffer.openInExternalEditor();
         return;
       }
 
       // Ctrl+V for clipboard paste
       if (keyMatchers[Command.PASTE_CLIPBOARD](key)) {
+        // eslint-disable-next-line @typescript-eslint/no-floating-promises
         handleClipboardPaste();
         return;
       }
