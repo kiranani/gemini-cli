@@ -123,7 +123,7 @@ export class Task {
   // process. This is not scoped to the individual task but reflects the global connection
   // state managed within the @gemini-cli/core module.
   async getMetadata(): Promise<TaskMetadata> {
-    const toolRegistry = await this.config.getToolRegistry();
+    const toolRegistry = this.config.getToolRegistry();
     const mcpServers = this.config.getMcpClientManager()?.getMcpServers() || {};
     const serverStatuses = getAllMCPServerStatuses();
     const servers = Object.keys(mcpServers).map((serverName) => ({
@@ -378,7 +378,7 @@ export class Task {
       if (tc.status === 'awaiting_approval' && tc.confirmationDetails) {
         this.pendingToolConfirmationDetails.set(
           tc.request.callId,
-          tc.confirmationDetails,
+          tc.confirmationDetails as ToolCallConfirmationDetails,
         );
       }
 
@@ -412,7 +412,9 @@ export class Task {
       toolCalls.forEach((tc: ToolCall) => {
         if (tc.status === 'awaiting_approval' && tc.confirmationDetails) {
           // eslint-disable-next-line @typescript-eslint/no-floating-promises
-          tc.confirmationDetails.onConfirm(ToolConfirmationOutcome.ProceedOnce);
+          (tc.confirmationDetails as ToolCallConfirmationDetails).onConfirm(
+            ToolConfirmationOutcome.ProceedOnce,
+          );
           this.pendingToolConfirmationDetails.delete(tc.request.callId);
         }
       });
@@ -707,6 +709,10 @@ export class Task {
       case GeminiEventType.ModelInfo:
         this.modelInfo = event.value;
         break;
+      case GeminiEventType.Retry:
+      case GeminiEventType.InvalidStream:
+        // An invalid stream should trigger a retry, which requires no action from the user.
+        break;
       case GeminiEventType.Error:
       default: {
         // Block scope for lexical declaration
@@ -747,8 +753,8 @@ export class Task {
       return false;
     }
 
-    const callId = part.data['callId'] as string;
-    const outcomeString = part.data['outcome'] as string;
+    const callId = part.data['callId'];
+    const outcomeString = part.data['outcome'];
     let confirmationOutcome: ToolConfirmationOutcome | undefined;
 
     if (outcomeString === 'proceed_once') {
